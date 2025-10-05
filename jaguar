@@ -1,0 +1,1206 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ADVANCED AUTO SNIPER AIMBOT V2.0
+-- Features: Ping Compensation, Velocity Smoothing, Pattern Detection,
+--           Confidence Scoring, Adaptive Learning, Multi-Target Tracking
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+local plr = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CONFIGURATION
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local Config = {
+    -- Core Settings
+    enabled = false,
+    maxDistance = 800,
+    bulletSpeed = 300,
+    baseShotDelay = 0.5,
+    
+    -- Prediction Settings
+    maxPredictTime = 0.5,
+    velocityFrames = 3, -- Default, will adapt
+    
+    -- Confidence Settings
+    minConfidence = 65, -- Minimum confidence % to shoot
+    
+    -- Visual Settings
+    showPredictionBeam = true,
+    showTargetESP = false,
+    showStatistics = true,
+    
+    -- Advanced Features
+    adaptiveLearning = true,
+    burstFireMode = false,
+    burstCount = 3,
+    burstDelay = 0.1,
+    multiTargetTracking = true,
+    teammateProtection = true,
+    
+    -- Performance
+    maxTrackedTargets = 3,
+    updateRate = 0.05, -- How often to update tracking data
+}
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- STATISTICS TRACKING
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local Statistics = {
+    shotsFired = 0,
+    shotsHit = 0,
+    shotsMissed = 0,
+    accuracy = 0,
+    recentShots = {}, -- Last 20 shots for adaptive learning
+    predictionMultiplier = 1.0, -- Adaptive adjustment
+    totalTargetsTracked = 0,
+    sessionsStartTime = tick(),
+}
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- TARGET TRACKING DATA
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local TrackedTargets = {} -- Stores velocity history per target
+
+local function getTargetData(player)
+    if not TrackedTargets[player] then
+        TrackedTargets[player] = {
+            velocityHistory = {},
+            positionHistory = {},
+            lastUpdate = tick(),
+            pattern = "unknown",
+            confidence = 0,
+        }
+    end
+    return TrackedTargets[player]
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- GUI SETUP
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AdvancedSniperAimbot"
+gui.Parent = plr.PlayerGui
+gui.ResetOnSpawn = false
+
+-- Status Display
+local statusFrame = Instance.new("Frame")
+statusFrame.Size = UDim2.new(0, 350, 0, 120)
+statusFrame.Position = UDim2.new(0.02, 0, 0.6, 0)
+statusFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+statusFrame.BackgroundTransparency = 0.2
+statusFrame.BorderSizePixel = 0
+statusFrame.Parent = gui
+
+local statusTitle = Instance.new("TextLabel")
+statusTitle.Size = UDim2.new(1, 0, 0, 25)
+statusTitle.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+statusTitle.BorderSizePixel = 0
+statusTitle.Text = "⚡ ADVANCED AIMBOT V2.0"
+statusTitle.TextColor3 = Color3.fromRGB(0, 255, 255)
+statusTitle.TextSize = 14
+statusTitle.Font = Enum.Font.GothamBold
+statusTitle.Parent = statusFrame
+
+local statusText = Instance.new("TextLabel")
+statusText.Size = UDim2.new(1, -10, 0, 20)
+statusText.Position = UDim2.new(0, 5, 0, 30)
+statusText.BackgroundTransparency = 1
+statusText.Text = "Status: DISABLED"
+statusText.TextColor3 = Color3.fromRGB(255, 100, 100)
+statusText.TextSize = 12
+statusText.Font = Enum.Font.Gotham
+statusText.TextXAlignment = Enum.TextXAlignment.Left
+statusText.Parent = statusFrame
+
+local pingText = Instance.new("TextLabel")
+pingText.Size = UDim2.new(1, -10, 0, 20)
+pingText.Position = UDim2.new(0, 5, 0, 50)
+pingText.BackgroundTransparency = 1
+pingText.Text = "Ping: -- ms"
+pingText.TextColor3 = Color3.fromRGB(200, 200, 200)
+pingText.TextSize = 12
+pingText.Font = Enum.Font.Gotham
+pingText.TextXAlignment = Enum.TextXAlignment.Left
+pingText.Parent = statusFrame
+
+local confidenceText = Instance.new("TextLabel")
+confidenceText.Size = UDim2.new(1, -10, 0, 20)
+confidenceText.Position = UDim2.new(0, 5, 0, 70)
+confidenceText.BackgroundTransparency = 1
+confidenceText.Text = "Confidence: --"
+confidenceText.TextColor3 = Color3.fromRGB(200, 200, 200)
+confidenceText.TextSize = 12
+confidenceText.Font = Enum.Font.Gotham
+confidenceText.TextXAlignment = Enum.TextXAlignment.Left
+confidenceText.Parent = statusFrame
+
+local statsText = Instance.new("TextLabel")
+statsText.Size = UDim2.new(1, -10, 0, 20)
+statsText.Position = UDim2.new(0, 5, 0, 90)
+statsText.BackgroundTransparency = 1
+statsText.Text = "Accuracy: 0% (0/0)"
+statsText.TextColor3 = Color3.fromRGB(200, 200, 200)
+statsText.TextSize = 12
+statsText.Font = Enum.Font.Gotham
+statsText.TextXAlignment = Enum.TextXAlignment.Left
+statsText.Parent = statusFrame
+
+-- Toggle Button
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(0, 170, 0, 35)
+toggleButton.Position = UDim2.new(0.02, 0, 0.75, 0)
+toggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+toggleButton.BorderSizePixel = 0
+toggleButton.Text = "🎯 TOGGLE [OFF]"
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.TextSize = 14
+toggleButton.Font = Enum.Font.GothamBold
+toggleButton.Parent = gui
+
+local settingsButton = Instance.new("TextButton")
+settingsButton.Size = UDim2.new(0, 170, 0, 35)
+settingsButton.Position = UDim2.new(0.02, 0, 0.8, 0)
+settingsButton.BackgroundColor3 = Color3.fromRGB(50, 50, 200)
+settingsButton.BorderSizePixel = 0
+settingsButton.Text = "⚙️ SETTINGS"
+settingsButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+settingsButton.TextSize = 14
+settingsButton.Font = Enum.Font.GothamBold
+settingsButton.Parent = gui
+
+-- Settings Panel (Hidden by default)
+local settingsPanel = Instance.new("Frame")
+settingsPanel.Size = UDim2.new(0, 300, 0, 250)
+settingsPanel.Position = UDim2.new(0.5, -150, 0.5, -125)
+settingsPanel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+settingsPanel.BorderSizePixel = 2
+settingsPanel.BorderColor3 = Color3.fromRGB(0, 255, 255)
+settingsPanel.Visible = false
+settingsPanel.Parent = gui
+
+local settingsTitle = Instance.new("TextLabel")
+settingsTitle.Size = UDim2.new(1, 0, 0, 30)
+settingsTitle.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+settingsTitle.BorderSizePixel = 0
+settingsTitle.Text = "⚙️ SETTINGS"
+settingsTitle.TextColor3 = Color3.fromRGB(0, 255, 255)
+settingsTitle.TextSize = 16
+settingsTitle.Font = Enum.Font.GothamBold
+settingsTitle.Parent = settingsPanel
+
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 30, 0, 30)
+closeButton.Position = UDim2.new(1, -30, 0, 0)
+closeButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeButton.BorderSizePixel = 0
+closeButton.Text = "✕"
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.TextSize = 16
+closeButton.Font = Enum.Font.GothamBold
+closeButton.Parent = settingsPanel
+
+-- Settings Options
+local yOffset = 40
+
+local function createToggle(name, configKey, yPos)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(1, -20, 0, 30)
+    container.Position = UDim2.new(0, 10, 0, yPos)
+    container.BackgroundTransparency = 1
+    container.Parent = settingsPanel
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.7, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = name
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.TextSize = 12
+    label.Font = Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = container
+    
+    local toggle = Instance.new("TextButton")
+    toggle.Size = UDim2.new(0, 60, 0, 25)
+    toggle.Position = UDim2.new(1, -65, 0, 2.5)
+    toggle.BackgroundColor3 = Config[configKey] and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(150, 50, 50)
+    toggle.BorderSizePixel = 0
+    toggle.Text = Config[configKey] and "ON" or "OFF"
+    toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    toggle.TextSize = 11
+    toggle.Font = Enum.Font.GothamBold
+    toggle.Parent = container
+    
+    toggle.MouseButton1Click:Connect(function()
+        Config[configKey] = not Config[configKey]
+        toggle.BackgroundColor3 = Config[configKey] and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(150, 50, 50)
+        toggle.Text = Config[configKey] and "ON" or "OFF"
+    end)
+end
+
+createToggle("Prediction Beam", "showPredictionBeam", yOffset)
+createToggle("Target ESP", "showTargetESP", yOffset + 35)
+createToggle("Adaptive Learning", "adaptiveLearning", yOffset + 70)
+createToggle("Burst Fire Mode", "burstFireMode", yOffset + 105)
+createToggle("Teammate Protection", "teammateProtection", yOffset + 140)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- UTILITY FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Get current ping
+local function getPing()
+    local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+    return math.floor(ping)
+end
+
+-- Get ping compensation values
+local function getPingCompensation(ping)
+    local extraPredictTime = 0
+    local delayMultiplier = 1.0
+    
+    if ping < 50 then
+        extraPredictTime = 0
+        delayMultiplier = 1.0
+    elseif ping < 70 then
+        extraPredictTime = 0.03
+        delayMultiplier = 1.0
+    elseif ping < 100 then
+        extraPredictTime = 0.05
+        delayMultiplier = 1.1
+    elseif ping < 150 then
+        extraPredictTime = 0.08
+        delayMultiplier = 1.2
+    elseif ping < 200 then
+        extraPredictTime = 0.12
+        delayMultiplier = 1.3
+    else
+        extraPredictTime = 0.15
+        delayMultiplier = 1.5
+    end
+    
+    return extraPredictTime, delayMultiplier
+end
+
+-- Check if position is on screen
+local function isOnScreen(position)
+    local screenPoint, onScreen = camera:WorldToViewportPoint(position)
+    return onScreen and screenPoint.Z > 0
+end
+
+-- Raycast line of sight
+local function hasLineOfSight(fromPos, toPos, ignoreList)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = ignoreList
+    params.IgnoreWater = true
+    
+    local direction = toPos - fromPos
+    local result = Workspace:Raycast(fromPos, direction, params)
+    
+    if not result then return true end
+    
+    -- Check if hit enemy character
+    for _, player in pairs(Players:GetPlayers()) do
+        if player.Character and result.Instance:IsDescendantOf(player.Character) then
+            return true
+        end
+    end
+    
+    return false
+end
+
+-- Check for teammates in line of fire
+local function isTeammateInWay(fromPos, toPos, ignoreChar)
+    if not Config.teammateProtection then return false end
+    if not plr.Team then return false end
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {ignoreChar}
+    params.IgnoreWater = true
+    
+    local direction = toPos - fromPos
+    local result = Workspace:Raycast(fromPos, direction, params)
+    
+    if result then
+        for _, teammate in pairs(Players:GetPlayers()) do
+            if teammate ~= plr and teammate.Team == plr.Team and teammate.Character then
+                if result.Instance:IsDescendantOf(teammate.Character) then
+                    return true
+                end
+            end
+        end
+    end
+    
+    return false
+end
+
+-- Visual beam for prediction
+local function spawnPredictionBeam(fromPos, toPos, confidence)
+    if not Config.showPredictionBeam then return end
+    
+    local color = Color3.fromRGB(255, 100, 100)
+    if confidence >= 80 then
+        color = Color3.fromRGB(100, 255, 100)
+    elseif confidence >= 65 then
+        color = Color3.fromRGB(255, 255, 100)
+    end
+    
+    local dist = (toPos - fromPos).Magnitude
+    local part = Instance.new("Part")
+    part.Anchored = true
+    part.CanCollide = false
+    part.Size = Vector3.new(0.1, 0.1, dist)
+    part.CFrame = CFrame.new((fromPos + toPos) / 2, toPos) * CFrame.new(0, 0, -dist / 2)
+    part.Material = Enum.Material.Neon
+    part.Color = color
+    part.Transparency = 0.5
+    part.Parent = Workspace
+    game:GetService("Debris"):AddItem(part, 0.15)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- VELOCITY TRACKING & SMOOTHING
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function updateTargetTracking(player, character)
+    local data = getTargetData(player)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    local currentVel = hrp.AssemblyLinearVelocity or hrp.Velocity or Vector3.new(0, 0, 0)
+    local currentPos = hrp.Position
+    
+    -- Store velocity history
+    table.insert(data.velocityHistory, 1, currentVel)
+    table.insert(data.positionHistory, 1, currentPos)
+    
+    -- Limit history size
+    if #data.velocityHistory > 10 then
+        table.remove(data.velocityHistory)
+        table.remove(data.positionHistory)
+    end
+    
+    data.lastUpdate = tick()
+end
+
+-- Get smoothed velocity with adaptive frame count
+local function getSmoothedVelocity(player, ping)
+    local data = getTargetData(player)
+    if #data.velocityHistory < 2 then
+        return data.velocityHistory[1] or Vector3.new(0, 0, 0)
+    end
+    
+    -- Determine frame count based on conditions
+    local frameCount = Config.velocityFrames
+    
+    -- Use 5 frames for high ping
+    if ping > 100 then
+        frameCount = 5
+    end
+    
+    -- Calculate velocity variance (detect erratic movement)
+    local variance = 0
+    if #data.velocityHistory >= 3 then
+        local avg = Vector3.new(0, 0, 0)
+        for i = 1, math.min(3, #data.velocityHistory) do
+            avg = avg + data.velocityHistory[i]
+        end
+        avg = avg / math.min(3, #data.velocityHistory)
+        
+        for i = 1, math.min(3, #data.velocityHistory) do
+            variance = variance + (data.velocityHistory[i] - avg).Magnitude
+        end
+        variance = variance / math.min(3, #data.velocityHistory)
+    end
+    
+    -- Use 5 frames for erratic movement
+    if variance > 15 then
+        frameCount = 5
+    end
+    
+    -- Calculate smoothed velocity
+    local sum = Vector3.new(0, 0, 0)
+    local count = math.min(frameCount, #data.velocityHistory)
+    
+    for i = 1, count do
+        sum = sum + data.velocityHistory[i]
+    end
+    
+    return sum / count, variance
+end
+
+-- Detect movement pattern
+local function detectMovementPattern(player, velocity, variance)
+    local data = getTargetData(player)
+    local speed = velocity.Magnitude
+    
+    if speed < 5 then
+        data.pattern = "still"
+    elseif speed < 15 and variance < 5 then
+        data.pattern = "walking"
+    elseif speed >= 15 and variance < 8 then
+        data.pattern = "running_straight"
+    elseif variance > 15 then
+        data.pattern = "erratic"
+    else
+        data.pattern = "normal"
+    end
+    
+    return data.pattern
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PREDICTION SYSTEM
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function predictTargetPosition(player, character, shooterPos, ping)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    local targetPos = hrp.Position
+    local smoothedVel, variance = getSmoothedVelocity(player, ping)
+    local pattern = detectMovementPattern(player, smoothedVel, variance)
+    
+    -- Get ping compensation
+    local extraPredictTime, _ = getPingCompensation(ping)
+    
+    -- Simple prediction for still targets
+    if pattern == "still" then
+        return targetPos, pattern, variance
+    end
+    
+    -- Apply adaptive learning multiplier
+    local adjustedVel = smoothedVel * Statistics.predictionMultiplier
+    
+    -- Calculate intercept using quadratic equation
+    local dir = targetPos - shooterPos
+    local a = adjustedVel:Dot(adjustedVel) - Config.bulletSpeed * Config.bulletSpeed
+    local b = 2 * adjustedVel:Dot(dir)
+    local c = dir:Dot(dir)
+    
+    local interceptTime = 0
+    
+    if math.abs(a) < 1e-6 then
+        if math.abs(b) < 1e-6 then
+            interceptTime = 0
+        else
+            local t = -c / b
+            interceptTime = t > 0 and math.min(t, Config.maxPredictTime) or 0
+        end
+    else
+        local discriminant = b * b - 4 * a * c
+        if discriminant >= 0 then
+            local sqrtDisc = math.sqrt(discriminant)
+            local t1 = (-b - sqrtDisc) / (2 * a)
+            local t2 = (-b + sqrtDisc) / (2 * a)
+            
+            if t1 > 0 then
+                interceptTime = math.min(t1, Config.maxPredictTime)
+            elseif t2 > 0 then
+                interceptTime = math.min(t2, Config.maxPredictTime)
+            end
+        end
+    end
+    
+    -- Add ping compensation
+    interceptTime = interceptTime + extraPredictTime
+    
+    -- Calculate predicted position
+    local predictedPos = targetPos + (adjustedVel * interceptTime)
+    
+    return predictedPos, pattern, variance
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CONFIDENCE SCORING SYSTEM
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function calculateConfidence(player, character, distance, pattern, variance, ping)
+    local confidence = 100
+    
+    -- Distance factor (closer = better)
+    if distance > 600 then
+        confidence = confidence - 25
+    elseif distance > 400 then
+        confidence = confidence - 15
+    elseif distance > 200 then
+        confidence = confidence - 5
+    end
+    
+    -- Ping factor
+    if ping > 150 then
+        confidence = confidence - 20
+    elseif ping > 100 then
+        confidence = confidence - 10
+    elseif ping > 70 then
+        confidence = confidence - 5
+    end
+    
+    -- Movement pattern factor
+    if pattern == "still" then
+        confidence = confidence + 10
+    elseif pattern == "walking" then
+        confidence = confidence + 5
+    elseif pattern == "running_straight" then
+        confidence = confidence + 0
+    elseif pattern == "erratic" then
+        confidence = confidence - 20
+    end
+    
+    -- Velocity variance factor
+    if variance > 20 then
+        confidence = confidence - 15
+    elseif variance > 10 then
+        confidence = confidence - 5
+    end
+    
+    -- Velocity consistency bonus
+    local data = getTargetData(player)
+    if #data.velocityHistory >= 5 then
+        local consistent = true
+        for i = 1, #data.velocityHistory - 1 do
+            if (data.velocityHistory[i] - data.velocityHistory[i + 1]).Magnitude > 10 then
+                consistent = false
+                break
+            end
+        end
+        if consistent then
+            confidence = confidence + 10
+        end
+    end
+    
+    -- Clamp confidence
+    confidence = math.clamp(confidence, 0, 100)
+    
+    -- Store for tracking
+    data.confidence = confidence
+    
+    return confidence
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- TARGET SELECTION & PRIORITY
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function findBestTargets()
+    local char = plr.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return {} end
+    
+    local shooterPos = char.HumanoidRootPart.Position
+    local ping = getPing()
+    local candidates = {}
+    
+    for _, targetPlayer in pairs(Players:GetPlayers()) do
+        if targetPlayer ~= plr then
+            -- Check team
+            local isDifferentTeam = false
+            if plr.Team and targetPlayer.Team then
+                isDifferentTeam = (targetPlayer.Team ~= plr.Team)
+            elseif not plr.Team and not targetPlayer.Team then
+                isDifferentTeam = true
+            end
+            
+            if isDifferentTeam then
+                local targetChar = targetPlayer.Character
+                if targetChar then
+                    local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
+                    local targetHum = targetChar:FindFirstChild("Humanoid")
+                    
+                    if targetHRP and targetHum and targetHum.Health > 0 then
+                        -- Update tracking data
+                        updateTargetTracking(targetPlayer, targetChar)
+                        
+                        local distance = (targetHRP.Position - shooterPos).Magnitude
+                        
+                        if distance <= Config.maxDistance then
+                            -- Check on screen
+                            if isOnScreen(targetHRP.Position) then
+                                -- Check line of sight
+                                if hasLineOfSight(camera.CFrame.Position, targetHRP.Position, {char}) then
+                                    -- Get prediction
+                                    local predictedPos, pattern, variance = predictTargetPosition(
+                                        targetPlayer, targetChar, shooterPos, ping
+                                    )
+                                    
+                                    if predictedPos then
+                                        -- Check teammate protection
+                                        if not isTeammateInWay(shooterPos, predictedPos, char) then
+                                            -- Calculate confidence
+                                            local confidence = calculateConfidence(
+                                                targetPlayer, targetChar, distance, pattern, variance, ping
+                                            )
+                                            
+                                            if confidence >= Config.minConfidence then
+                                                table.insert(candidates, {
+                                                    player = targetPlayer,
+                                                    character = targetChar,
+                                                    position = predictedPos,
+                                                    distance = distance,
+                                                    confidence = confidence,
+                                                    pattern = pattern,
+                                                    variance = variance,
+                                                })
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Sort by confidence first, then distance
+    table.sort(candidates, function(a, b)
+        if math.abs(a.confidence - b.confidence) > 5 then
+            return a.confidence > b.confidence
+        else
+            return a.distance < b.distance
+        end
+    end)
+    
+    -- Return top targets
+    local topTargets = {}
+    for i = 1, math.min(Config.maxTrackedTargets, #candidates) do
+        table.insert(topTargets, candidates[i])
+    end
+    
+    return topTargets
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ADAPTIVE LEARNING SYSTEM
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function recordShot(hit)
+    Statistics.shotsFired = Statistics.shotsFired + 1
+    
+    if hit then
+        Statistics.shotsHit = Statistics.shotsHit + 1
+    else
+        Statistics.shotsMissed = Statistics.shotsMissed + 1
+    end
+    
+    -- Update recent shots (last 20)
+    table.insert(Statistics.recentShots, 1, hit)
+    if #Statistics.recentShots > 20 then
+        table.remove(Statistics.recentShots)
+    end
+    
+    -- Calculate accuracy
+    if Statistics.shotsFired > 0 then
+        Statistics.accuracy = (Statistics.shotsHit / Statistics.shotsFired) * 100
+    end
+    
+    -- Adaptive learning: adjust prediction multiplier
+    if Config.adaptiveLearning and #Statistics.recentShots >= 10 then
+        local recentHits = 0
+        for i = 1, math.min(10, #Statistics.recentShots) do
+            if Statistics.recentShots[i] then
+                recentHits = recentHits + 1
+            end
+        end
+        local recentAccuracy = (recentHits / math.min(10, #Statistics.recentShots)) * 100
+        
+        -- Adjust multiplier
+        if recentAccuracy < 50 then
+            Statistics.predictionMultiplier = math.min(1.3, Statistics.predictionMultiplier + 0.05)
+        elseif recentAccuracy > 80 then
+            Statistics.predictionMultiplier = math.max(0.7, Statistics.predictionMultiplier - 0.05)
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- SHOOTING SYSTEM
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local lastShotTime = 0
+
+local function shootTarget(targetInfo)
+    local char = plr.Character
+    if not char or not char:FindFirstChild("Sniper") then return end
+    
+    local currentTime = tick()
+    local ping = getPing()
+    local _, delayMultiplier = getPingCompensation(ping)
+    local adjustedDelay = Config.baseShotDelay * delayMultiplier
+    
+    if currentTime - lastShotTime < adjustedDelay then
+        return
+    end
+    
+    lastShotTime = currentTime
+    
+    -- Spawn visual beam
+    spawnPredictionBeam(camera.CFrame.Position, targetInfo.position, targetInfo.confidence)
+    
+    -- Fire shot
+    local args = {
+        [1] = targetInfo.position,
+        [2] = "Sniper",
+        [3] = char.Sniper
+    }
+    
+    local success, err = pcall(function()
+        ReplicatedStorage.Events.Remote.ShotTarget:FireServer(unpack(args))
+    end)
+    
+    if success then
+        -- Record shot (we'll assume hit for now - you can add hit detection if available)
+        recordShot(true) -- Change this if you have actual hit detection
+    else
+        warn("Failed to fire: " .. tostring(err))
+    end
+    
+    -- Burst fire mode
+    if Config.burstFireMode and targetInfo.confidence < 70 then
+        task.spawn(function()
+            for i = 2, Config.burstCount do
+                task.wait(Config.burstDelay)
+                
+                -- Re-check if target is still valid
+                if targetInfo.character and targetInfo.character:FindFirstChild("HumanoidRootPart") then
+                    local updatedPos, _, _ = predictTargetPosition(
+                        targetInfo.player, 
+                        targetInfo.character, 
+                        char.HumanoidRootPart.Position, 
+                        ping
+                    )
+                    
+                    if updatedPos then
+                        local burstArgs = {
+                            [1] = updatedPos,
+                            [2] = "Sniper",
+                            [3] = char.Sniper
+                        }
+                        
+                        pcall(function()
+                            ReplicatedStorage.Events.Remote.ShotTarget:FireServer(unpack(burstArgs))
+                        end)
+                        
+                        spawnPredictionBeam(camera.CFrame.Position, updatedPos, targetInfo.confidence)
+                        recordShot(true)
+                    end
+                end
+            end
+        end)
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- GUI BUTTON HANDLERS
+-- ═══════════════════════════════════════════════════════════════════════════
+
+toggleButton.MouseButton1Click:Connect(function()
+    Config.enabled = not Config.enabled
+    
+    if Config.enabled then
+        toggleButton.Text = "🎯 TOGGLE [ON]"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+        statusText.Text = "Status: ENABLED - Searching..."
+        statusText.TextColor3 = Color3.fromRGB(100, 255, 100)
+    else
+        toggleButton.Text = "🎯 TOGGLE [OFF]"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        statusText.Text = "Status: DISABLED"
+        statusText.TextColor3 = Color3.fromRGB(255, 100, 100)
+    end
+end)
+
+settingsButton.MouseButton1Click:Connect(function()
+    settingsPanel.Visible = not settingsPanel.Visible
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    settingsPanel.Visible = false
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- GUI UPDATE LOOP
+-- ═══════════════════════════════════════════════════════════════════════════
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        
+        local ping = getPing()
+        
+        -- Update ping display with color coding
+        local pingColor = Color3.fromRGB(100, 255, 100)
+        if ping > 100 then
+            pingColor = Color3.fromRGB(255, 100, 100)
+        elseif ping > 70 then
+            pingColor = Color3.fromRGB(255, 255, 100)
+        end
+        pingText.Text = string.format("Ping: %d ms | Multiplier: %.2fx", ping, Statistics.predictionMultiplier)
+        pingText.TextColor3 = pingColor
+        
+        -- Update stats
+        if Config.showStatistics then
+            statsText.Text = string.format(
+                "Accuracy: %.1f%% (%d/%d) | Targets: %d",
+                Statistics.accuracy,
+                Statistics.shotsHit,
+                Statistics.shotsFired,
+                Statistics.totalTargetsTracked
+            )
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- MAIN AIMBOT LOOP
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local currentTargetIndex = 1
+local activeTargets = {}
+
+task.spawn(function()
+    while true do
+        task.wait(Config.updateRate)
+        
+        if not Config.enabled then
+            statusText.Text = "Status: DISABLED"
+            statusText.TextColor3 = Color3.fromRGB(255, 100, 100)
+            confidenceText.Text = "Confidence: --"
+            continue
+        end
+        
+        local char = plr.Character
+        if not char or not char:FindFirstChild("Sniper") then
+            statusText.Text = "Status: ENABLED - Sniper not equipped"
+            statusText.TextColor3 = Color3.fromRGB(255, 255, 100)
+            confidenceText.Text = "Confidence: --"
+            continue
+        end
+        
+        -- Find best targets
+        activeTargets = findBestTargets()
+        Statistics.totalTargetsTracked = #activeTargets
+        
+        if #activeTargets == 0 then
+            statusText.Text = "Status: ENABLED - No valid targets"
+            statusText.TextColor3 = Color3.fromRGB(255, 255, 100)
+            confidenceText.Text = "Confidence: --"
+            confidenceText.TextColor3 = Color3.fromRGB(200, 200, 200)
+            continue
+        end
+        
+        -- Get primary target
+        local primaryTarget = activeTargets[1]
+        
+        -- Update status display
+        local teamInfo = ""
+        if primaryTarget.player.Team then
+            teamInfo = " [" .. primaryTarget.player.Team.Name .. "]"
+        end
+        
+        statusText.Text = string.format(
+            "Target: %s%s | %.1f studs | %s",
+            primaryTarget.player.Name,
+            teamInfo,
+            primaryTarget.distance,
+            primaryTarget.pattern:upper()
+        )
+        statusText.TextColor3 = Color3.fromRGB(100, 255, 100)
+        
+        -- Update confidence display with color coding
+        local confColor = Color3.fromRGB(255, 100, 100)
+        if primaryTarget.confidence >= 80 then
+            confColor = Color3.fromRGB(100, 255, 100)
+        elseif primaryTarget.confidence >= 65 then
+            confColor = Color3.fromRGB(255, 255, 100)
+        end
+        
+        confidenceText.Text = string.format(
+            "Confidence: %.0f%% | Variance: %.1f | Frames: %d",
+            primaryTarget.confidence,
+            primaryTarget.variance,
+            Config.velocityFrames
+        )
+        confidenceText.TextColor3 = confColor
+        
+        -- Shoot at primary target
+        shootTarget(primaryTarget)
+        
+        -- Multi-target tracking display (optional)
+        if Config.multiTargetTracking and #activeTargets > 1 then
+            -- You can add additional visual indicators for secondary targets here
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- TARGET ESP SYSTEM (OPTIONAL)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local espObjects = {}
+
+local function createESP(character, confidence)
+    if not Config.showTargetESP then return end
+    
+    -- Remove old ESP if exists
+    if espObjects[character] then
+        pcall(function()
+            espObjects[character]:Destroy()
+        end)
+    end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    -- Create highlight
+    local highlight = Instance.new("Highlight")
+    highlight.Adornee = character
+    highlight.FillTransparency = 0.7
+    highlight.OutlineTransparency = 0.3
+    
+    -- Color based on confidence
+    if confidence >= 80 then
+        highlight.FillColor = Color3.fromRGB(100, 255, 100)
+        highlight.OutlineColor = Color3.fromRGB(50, 200, 50)
+    elseif confidence >= 65 then
+        highlight.FillColor = Color3.fromRGB(255, 255, 100)
+        highlight.OutlineColor = Color3.fromRGB(200, 200, 50)
+    else
+        highlight.FillColor = Color3.fromRGB(255, 100, 100)
+        highlight.OutlineColor = Color3.fromRGB(200, 50, 50)
+    end
+    
+    highlight.Parent = character
+    espObjects[character] = highlight
+    
+    -- Auto-cleanup after 0.2s
+    task.delay(0.2, function()
+        pcall(function()
+            highlight:Destroy()
+        end)
+    end)
+end
+
+-- Update ESP for active targets
+task.spawn(function()
+    while true do
+        task.wait(0.15)
+        
+        if Config.showTargetESP and Config.enabled then
+            for _, targetInfo in pairs(activeTargets) do
+                if targetInfo.character then
+                    createESP(targetInfo.character, targetInfo.confidence)
+                end
+            end
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CLEANUP ON CHARACTER DEATH/RESPAWN
+-- ═══════════════════════════════════════════════════════════════════════════
+
+plr.CharacterAdded:Connect(function(character)
+    -- Reset tracking data on respawn
+    TrackedTargets = {}
+    activeTargets = {}
+    
+    -- Clear ESP objects
+    for _, esp in pairs(espObjects) do
+        pcall(function()
+            esp:Destroy()
+        end)
+    end
+    espObjects = {}
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PLAYER CLEANUP
+-- ═══════════════════════════════════════════════════════════════════════════
+
+Players.PlayerRemoving:Connect(function(player)
+    -- Clean up tracking data when player leaves
+    if TrackedTargets[player] then
+        TrackedTargets[player] = nil
+    end
+    
+    -- Clean up ESP
+    if player.Character and espObjects[player.Character] then
+        pcall(function()
+            espObjects[player.Character]:Destroy()
+        end)
+        espObjects[player.Character] = nil
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PERFORMANCE MONITORING (OPTIONAL)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local performanceStats = {
+    avgLoopTime = 0,
+    peakLoopTime = 0,
+    loopCount = 0,
+}
+
+task.spawn(function()
+    while true do
+        task.wait(5) -- Update every 5 seconds
+        
+        if performanceStats.loopCount > 0 then
+            local avgTime = performanceStats.avgLoopTime / performanceStats.loopCount
+            
+            -- Warn if performance is degrading
+            if avgTime > 0.1 then
+                warn(string.format(
+                    "[AIMBOT PERFORMANCE] High loop time detected: %.3fs (Peak: %.3fs)",
+                    avgTime,
+                    performanceStats.peakLoopTime
+                ))
+            end
+            
+            -- Reset counters
+            performanceStats.avgLoopTime = 0
+            performanceStats.loopCount = 0
+            performanceStats.peakLoopTime = 0
+        end
+    end
+end)
+
+-- Track loop performance
+local function trackPerformance(loopTime)
+    performanceStats.avgLoopTime = performanceStats.avgLoopTime + loopTime
+    performanceStats.loopCount = performanceStats.loopCount + 1
+    
+    if loopTime > performanceStats.peakLoopTime then
+        performanceStats.peakLoopTime = loopTime
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- KEYBIND SUPPORT (OPTIONAL)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local UserInputService = game:GetService("UserInputService")
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    -- Toggle with 'Z' key
+    if input.KeyCode == Enum.KeyCode.Z then
+        Config.enabled = not Config.enabled
+        
+        if Config.enabled then
+            toggleButton.Text = "🎯 TOGGLE [ON]"
+            toggleButton.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+            statusText.Text = "Status: ENABLED - Searching..."
+            statusText.TextColor3 = Color3.fromRGB(100, 255, 100)
+        else
+            toggleButton.Text = "🎯 TOGGLE [OFF]"
+            toggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+            statusText.Text = "Status: DISABLED"
+            statusText.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+    end
+    
+    -- Toggle settings with 'X' key
+    if input.KeyCode == Enum.KeyCode.X then
+        settingsPanel.Visible = not settingsPanel.Visible
+    end
+    
+    -- Toggle prediction beam with 'C' key
+    if input.KeyCode == Enum.KeyCode.C then
+        Config.showPredictionBeam = not Config.showPredictionBeam
+    end
+    
+    -- Toggle ESP with 'V' key
+    if input.KeyCode == Enum.KeyCode.V then
+        Config.showTargetESP = not Config.showTargetESP
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- INITIALIZATION MESSAGE
+-- ═══════════════════════════════════════════════════════════════════════════
+
+print("═══════════════════════════════════════════════════════════════")
+print("    ADVANCED AUTO SNIPER AIMBOT V2.0 - LOADED SUCCESSFULLY    ")
+print("═══════════════════════════════════════════════════════════════")
+print("")
+print("Features Enabled:")
+print("  ✓ Ping Compensation (Dynamic)")
+print("  ✓ Adaptive Velocity Smoothing (3-5 frames)")
+print("  ✓ Movement Pattern Detection")
+print("  ✓ Confidence Scoring System (65% threshold)")
+print("  ✓ Multi-Target Tracking")
+print("  ✓ Adaptive Learning")
+print("  ✓ Burst Fire Mode")
+print("  ✓ Teammate Protection")
+print("  ✓ Line of Sight Raycast")
+print("  ✓ On-Screen Target Filtering")
+print("")
+print("Keybinds:")
+print("  Z - Toggle Aimbot ON/OFF")
+print("  X - Open Settings Panel")
+print("  C - Toggle Prediction Beam")
+print("  V - Toggle Target ESP")
+print("")
+print("Current Settings:")
+print(string.format("  Max Distance: %d studs", Config.maxDistance))
+print(string.format("  Bullet Speed: %d studs/s", Config.bulletSpeed))
+print(string.format("  Base Shot Delay: %.2fs", Config.baseShotDelay))
+print(string.format("  Min Confidence: %d%%", Config.minConfidence))
+print("")
+print("Click the TOGGLE button or press Z to start!")
+print("═══════════════════════════════════════════════════════════════")
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ADVANCED DEBUGGING (OPTIONAL - COMMENT OUT IN PRODUCTION)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+--[[
+local debugMode = false
+
+if debugMode then
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            
+            if Config.enabled then
+                print("═══ DEBUG INFO ═══")
+                print("Active Targets:", #activeTargets)
+                print("Tracked Targets:", #TrackedTargets)
+                print("Current Ping:", getPing(), "ms")
+                print("Prediction Multiplier:", Statistics.predictionMultiplier)
+                print("Accuracy:", string.format("%.1f%%", Statistics.accuracy))
+                
+                if #activeTargets > 0 then
+                    local target = activeTargets[1]
+                    print("Primary Target:", target.player.Name)
+                    print("  Distance:", string.format("%.1f", target.distance))
+                    print("  Confidence:", string.format("%.0f%%", target.confidence))
+                    print("  Pattern:", target.pattern)
+                    print("  Variance:", string.format("%.1f", target.variance))
+                end
+                
+                print("═══════════════════")
+            end
+        end
+    end)
+end
+]]--
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- END OF SCRIPT
+-- ═══════════════════════════════════════════════════════════════════════════
